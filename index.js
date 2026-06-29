@@ -537,7 +537,20 @@ async function syncPinnedMemory(ctx, force = false) {
 
 // ── 处理失败 ──
 
+// 轻量缓存：每 10 秒重读一次配置，用户改设置后无需重启插件
+let lastConfigRead = 0;
+const SENSITIVITY_CACHE = { "灵敏": 1, "适中": 2, "标准": 3 };
+function refreshThreshold(ctx) {
+  if (Date.now() - lastConfigRead < 10_000) return;
+  lastConfigRead = Date.now();
+  const raw = ctx.config?.get?.("strikeThreshold") ?? "适中";
+  strikeThreshold = typeof raw === "number" ? raw : (SENSITIVITY_CACHE[raw] ?? 2);
+  ctx.log?.debug?.("[self-evolve] config refreshed: raw=" + raw + " → strikeThreshold=" + strikeThreshold);
+}
+
 async function processFailure(ctx, record) {
+  refreshThreshold(ctx);
+
   // 噪声过滤：无实际错误文本的失败直接丢弃
   if (isNoiseError(record.error)) {
     ctx.log?.debug?.("[self-evolve] noise filtered: " + (record.tool || "?") + " error.length=" + (record.error || "").length);
