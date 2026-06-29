@@ -98,7 +98,13 @@ const EPHEMERAL_PATTERNS = new Set(
 // ── 延迟分析模式（周期性 LLM 判断，不直接触发）──
 const DEFERRED_PATTERNS = new Set(["file_not_found"]);
 function classifyError(tool, errorMsg) {
-  const msg = (errorMsg || "").toLowerCase();
+  // 剥离 "Received arguments:" 段——工具校验错误会把完整参数原文附加在错误信息后
+  // 其中可能包含 utf-8、oldText 等源码级 token，污染关键词匹配
+  let clean = (errorMsg || "");
+  const argIdx = clean.indexOf("\nReceived arguments:");
+  if (argIdx >= 0) clean = clean.substring(0, argIdx);
+
+  const msg = clean.toLowerCase();
   const toolKey = String(tool || "unknown").toLowerCase().replace(/\s+/g, "_");
 
   for (const cls of ERROR_CLASSIFIERS) {
