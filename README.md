@@ -1,8 +1,8 @@
 # Self Evolve — 工具调用自进化插件
 
-自动捕获 Agent 工具调用失败，同模式累计后触发 LLM 分析生成修复规则，写入置顶记忆（pinned memory）防止重复踩坑。已有规则再次失败时，对比式重分析精炼或补充规则。
+自动捕获 Agent 工具调用失败，同类错误累计指定次数后触发 LLM 分析生成修复规则，写入置顶记忆（pinned memory）防止重复踩坑。已有规则再次失败时，对比式重分析精炼或补充规则。
 
-**零 UI，零用户操作。** 安装启用后全自动运行，无需任何配置或交互。
+安装启用后全自动运行。触发灵敏度可通过设置面板调整为「灵敏/适中/标准」（对应 1/2/3 次），默认「适中」。除此外无需任何用户操作。
 
 ## 核心机制
 
@@ -25,8 +25,8 @@
 
 | 分类 | 关键词 | 模式 |
 |---|---|---|
-| `file_not_found` | enoent, no such file, not found, 找不到, does not exist | DEFERRED（延迟 5 次） |
-| `encoding` | encoding, gbk, utf, codec, chcp, cannot decode, ascii, latin | 普通（3 次） |
+| `file_not_found` | enoent, no such file, not found, 找不到, does not exist | DEFERRED（延迟） |
+| `encoding` | encoding, gbk, utf, codec, chcp, cannot decode, ascii, latin | 普通 |
 | `edit_failure` | no match found, oldtext, could not find the exact text, no changes made | 普通 |
 | `validation` | validation, required parameter, missing required, must have, invalid type | 普通 |
 | `parse_error` | json parse, not valid json, unexpected token, malformed, traceback, syntaxerror | 普通 |
@@ -41,22 +41,24 @@
 | `cmd_not_found` | command not found, is not recognized, module not found | EPHEMERAL |
 | `context_overflow` | context length, token limit, too long, maximum context | EPHEMERAL |
 | `empty_result` | empty response, no output, no result | EPHEMERAL |
-| `unclassified` | (兜底) | 开放分类（5 次） |
+| `unclassified` | (兜底) | 开放分类 |
 
 三种模式：
-- **普通**：同一签名累计 3 次触发 LLM 分析
-- **DEFERRED（延迟）**：累计 5 次触发，适用于 file_not_found 等高频低价值错误
+- **普通**：同类错误累计达到「触发灵敏度」次后触发 LLM 分析（可通过设置面板调整，默认"适中"=2 次）
+- **DEFERRED（延迟）**：累计 strikeThreshold×2（下限 3）次触发，适用于 file_not_found 等高频低价值错误
 - **EPHEMERAL（短暂）**：只计数不分析，适用于语法随手错、网络抖动等不可控因素
 
-### 触发阈值
+### 触发灵敏度
 
-| 模式 | 触发条件 | 行为 |
-|------|---------|------|
-| 普通 | 同一签名 ≥ 3 次 + 无规则 | 首次分析，生成规则 |
-| DEFERRED | 同一签名 ≥ 5 次 | 首次分析 / 周期重分析 |
-| EPHEMERAL | — | 只计数，不分析 |
-| unclassified | 同一签名 ≥ 5 次 | 开放分类尝试 |
-| 已有规则 + 新失败 | 同一签名每 ≥ 3 次 | 对比重分析 |
+通过设置面板调整，三个档位：
+
+| 显示名 | 内部次数 | 普通模式 | DEFERRED/unclassified |
+|--------|---------|---------|----------------------|
+| 灵敏 | 1 | 首次即分析 | 每 3 次 |
+| 适中（默认）| 2 | 每 2 次 | 每 4 次 |
+| 标准 | 3 | 每 3 次 | 每 6 次 |
+
+所有模式（普通/DEFERRED/unclassified）使用同一灵敏度配置，DEFERRED 和 unclassified 按 `strikeThreshold × 2`（下限 3）自动计算。
 
 ### 规则精炼（两次处置）
 
@@ -99,11 +101,17 @@
 **特征**：以 `⚠ pattern → fix（cause）` 格式，pattern 不包含 agentId（agent 由 `?agentId=` API 参数隔离）。
 手动添加的置顶记忆不会使用此格式。
 
+## 配置
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| 触发灵敏度 | enum：灵敏/适中/标准 | 适中 | 同类错误累计多少次后触发 LLM 分析 |
+
 ## 结构
 
 ```
 self-evolve/
-├── manifest.json              # 插件清单（含 network.fetch + allowLocalhost 声明）
+├── manifest.json              # 插件清单（含配置 schema）
 ├── index.js                   # 核心：错误捕获、分类器、LLM 分析、规则管理、pinned 同步
 ├── CONTEXT.md                 # 共享术语表与架构决策记录
 └── README.md
@@ -153,10 +161,10 @@ processFailure 接收错误
 ```
 判断是否触发 LLM 分析：
 
-  DEFERRED（如 file_not_found）→ count % 5 === 0 才触发
+  DEFERRED（如 file_not_found）→ count % Math.max(strikeThreshold * 2, 3) === 0 才触发
   EPHEMERAL（如 syntax_error）→ 跳过，只计数
-  普通模式 → strike（count % 3 === 0）触发
-  unclassified → count % 5 === 0 触发开放分类
+  普通模式 → strike（count % strikeThreshold === 0）触发
+  unclassified → count % Math.max(strikeThreshold * 2, 3) === 0 触发开放分类
 
   ↓ 非延迟 + strike 通过后
 
@@ -209,7 +217,7 @@ LLM 返回后
 - 新增 pattern 时确保 pattern 名不与已有的 tool 名产生歧义（如 `media_generate-image` 和 `validation` 都安全）
 - pattern 可含下划线（如 `file_not_found`），pattern 提取用 `endsWith("_" + pattern)` 匹配，不受影响
 - 关键词不要太宽泛如 `redirect`、`stdout`、`missing`——会导致误分类，挤占正常错误的触发额度
-- 新增 DEFERRED 模式时，在 `DEFERRED_PATTERNS` Set 中加入 pattern 名
+- 新增 DEFERRED 模式时，在 `DEFERRED_PATTERNS` Set 中加入 pattern 名。DEFERRED 触发间隔自动按 `Math.max(strikeThreshold * 2, 3)` 计算，无需手动设值
 - 新增 EPHEMERAL 模式时，在 `ERROR_CLASSIFIERS` 条目中加 `ephemeral: true`
 
 ### 二、修改 LLM 分析 Prompt
