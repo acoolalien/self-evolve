@@ -33,7 +33,7 @@
 
 **日期**：2026-06-30（最后更新：2026-06-30）
 
-**决策**：三种触发模式——普通模式 3 次触发（STRIKE_THRESHOLD）、DEFERRED 模式 5 次触发、unclassified 模式 5 次触发。
+**决策**：三种触发模式——普通模式 N 次触发（strikeThreshold，通过"灵敏/适中/标准"枚举配置，对应 1/2/3 次，默认"适中"即 2 次）、DEFERRED 模式 `strikeThreshold×2`（下限 3）次触发、unclassified 模式同样 `strikeThreshold×2`（下限 3）次触发。
 
 **理由**：
 - 95% 的失败是一次性笔误（漏引号、错参数名），分析这些浪费 token

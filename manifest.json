@@ -2,8 +2,8 @@
   "manifestVersion": 1,
   "id": "self-evolve",
   "name": "Self Evolve",
-  "version": "0.1.0",
-  "description": "自动捕获 Agent 工具调用失败，同模式累计 3 次后通过 LLM 分析生成修复规则，写入置顶记忆实现自进化。",
+  "version": "0.1.1",
+  "description": "自动捕获 Agent 工具调用失败，同类错误累计指定次数后通过 LLM 分析生成修复规则，写入置顶记忆实现自进化。",
   "minAppVersion": "0.159.0",
   "trust": "full-access",
   "capabilities": [
@@ -13,6 +13,20 @@
     "resource.read",
     "network.fetch"
   ],
+  "contributes": {
+    "configuration": {
+      "type": "object",
+      "properties": {
+        "strikeThreshold": {
+          "title": "触发灵敏度",
+          "type": "string",
+          "default": "适中",
+          "enum": ["灵敏", "适中", "标准"],
+          "description": "同类错误发生多少次后触发 LLM 分析。灵敏=1次、适中=2次、标准=3次"
+        }
+      }
+    }
+  },
   "network": {
     "allowedHosts": ["127.0.0.1"],
     "allowLocalhost": true,

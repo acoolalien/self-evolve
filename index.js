@@ -4,9 +4,9 @@
  * 工作流：
  *   1. afterToolCall 钩子捕获失败
  *   2. 关键词分类 → 错误签名（fixcache 风格）
- *   3. 同一签名累计 ≥ 3 次 → 触发 LLM 分析
+ *   3. 同类错误累计 ≥ strikeThreshold 次 → 触发 LLM 分析
  *   4. 首次分析 → 生成 FixRule
- *   5. 已有规则又失败 ≥ 3 次 → 对比式重分析（精炼/补充规则）
+ *   5. 已有规则又失败 ≥ strikeThreshold 次 → 对比式重分析（精炼/补充规则）
  *   6. 规则写入 fileRuleDir + 同步到 pinned memory（- 列表项格式）
  *
  * 权限依赖：
@@ -20,7 +20,7 @@ import { join, sep } from "node:path";
 
 // ── 常量 ──
 const MAX_RECORDS = 500;
-const STRIKE_THRESHOLD = 3;                // 同一签名出现 ≥ 3 次才触发 LLM 分析
+let strikeThreshold = 3;                  // 同一签名累计多少次触发 LLM 分析（可通过配置修改）
 const ANALYZE_COOLDOWN_MS = 5 * 60 * 1000; // 同一签名两次分析的间隔
 const PINNED_SYNC_COOLDOWN_MS = 30_000;
 const RULES_FILE = "fix-rules.json";
@@ -223,7 +223,7 @@ function recordFailure(record) {
   signatureCounts.set(signature, count);
   saveFailures();
 
-  const strike = count % STRIKE_THRESHOLD === 0; // 每 N 次触发一次 strike
+  const strike = count % strikeThreshold === 0; // 每 N 次触发一次 strike
   return { id, signature, count, strike };
 }
 
@@ -565,10 +565,10 @@ async function processFailure(ctx, record) {
   const knownPatterns = ERROR_CLASSIFIERS.map(c => c.pattern);
   const patternOnly = knownPatterns.find(p => baseSig.endsWith("_" + p)) || "unclassified";
   if (DEFERRED_PATTERNS.has(patternOnly)) {
-    if (count % 5 !== 0) return;
+    if (count % Math.max(strikeThreshold * 2, 3) !== 0) return;
     ctx.log?.info?.("[self-evolve] deferred analysis: " + signature + " (count=" + count + ")");
   } else if (!strike) {
-    return; // 非延迟模式，攒够 STRIKE_THRESHOLD 次才分析
+    return; // 非延迟模式，攒够 strikeThreshold 次才分析
   }
 
   const existingRule = fixRules.get(signature);
@@ -580,7 +580,7 @@ async function processFailure(ctx, record) {
 
   // unclassified 每 10 次触发一次 LLM 分析（开放分类），其余跳过
   if (signature.endsWith("_unclassified")) {
-    if (count % 5 !== 0) {
+    if (count % Math.max(strikeThreshold * 2, 3) !== 0) {
       ctx.log?.debug?.("[self-evolve] unclassified failure, skip:", signature);
       return;
     }
@@ -653,6 +653,23 @@ export default class Plugin {
     failuresPath = join(dataDir, FAILURES_FILE);
 
     loadPersisted();
+
+    // 从配置读取触发灵敏度（默认 "适中" → 2 次）
+    // 字符串枚举 → 内部数字映射
+    const SENSITIVITY_MAP = { "灵敏": 1, "适中": 2, "标准": 3 };
+    let rawThreshold = ctx.config?.get?.("strikeThreshold") ?? "适中";
+    // 兼容旧版数字类型配置
+    if (typeof rawThreshold === "number") {
+      strikeThreshold = rawThreshold;
+    } else {
+      strikeThreshold = SENSITIVITY_MAP[rawThreshold] ?? 2;
+    }
+    try {
+      const resolvedCfg = JSON.parse(readFileSync(join(dataDir, "config.resolved.json"), "utf-8"));
+      const val = resolvedCfg.strikeThreshold;
+      if (typeof val === "number" && val >= 1) strikeThreshold = val;
+      else if (typeof val === "string" && SENSITIVITY_MAP[val]) strikeThreshold = SENSITIVITY_MAP[val];
+    } catch {}
 
     // utility 模型可用性延迟到首次 callLLM 时检测
     // （server/index.ts 在 initPlugins 之后才注册 model:sample-text handler）
