@@ -1,0 +1,23 @@
+{
+  "manifestVersion": 1,
+  "id": "self-evolve",
+  "name": "Self Evolve",
+  "version": "0.1.0",
+  "description": "自动捕获 Agent 工具调用失败，同模式累计 3 次后通过 LLM 分析生成修复规则，写入置顶记忆实现自进化。",
+  "minAppVersion": "0.159.0",
+  "trust": "full-access",
+  "capabilities": [
+    "session",
+    "agent",
+    "model.sample",
+    "resource.read",
+    "network.fetch"
+  ],
+  "network": {
+    "allowedHosts": ["127.0.0.1"],
+    "allowLocalhost": true,
+    "methods": ["GET", "POST", "PUT"],
+    "defaultTimeoutMs": 5000,
+    "maxResponseBytes": 1048576
+  }
+}
