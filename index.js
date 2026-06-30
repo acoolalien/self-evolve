@@ -491,89 +491,117 @@ async function syncPinnedMemory(ctx, force = false) {
       if (si.port) port = si.port;
     } catch { /* token-less fallback */ }
 
-    const agentId = ctx.sessionPath
-      ? ctx.sessionPath.split(sep).slice(-3, -2)[0]
-      : "hanako";
-
     const baseUrl = `http://127.0.0.1:${port}`;
     const headers = { "Content-Type": "application/json" };
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
-    // GET 当前置顶记忆
-    const getRes = await ctx.network.fetch(`${baseUrl}/api/pinned?agentId=${encodeURIComponent(agentId)}`, { headers });
-    let existingPins = [];
-    if (getRes.ok) {
-      const body = await getRes.json();
-      existingPins = Array.isArray(body?.pins) ? body.pins : [];
-    }
-
-    // 提取当前置顶记忆中所有规则的模式名（去 agentId 前缀），用于匹配
-    const pinnedPatterns = new Set();
-    for (const p of existingPins) {
-      const m = p.trim().match(/^⚠\s+(.+?)\s+→\s+/);
-      if (m) pinnedPatterns.add(m[1].replace(/^[^:]+:/, ''));
-    }
-
-    let rulesChanged = false;
-    const toWrite = [];
-
-    for (const rule of activeRules) {
-      const cleanPattern = rule.pattern.replace(/^[^:]+:/, '');
-      const inPinned = pinnedPatterns.has(cleanPattern);
-
-      if (rule.written && !inPinned) {
-        // 曾经写入过但现在不在置顶记忆中 → 用户手动删除了 → 标记驳回
-        rule.dismissed = true;
-        rulesChanged = true;
-        ctx.log?.info?.("[self-evolve] rule dismissed by user: " + rule.pattern);
-        continue;
-      }
-
-      if (inPinned && !rule.written) { rule.written = true; rulesChanged = true; }
-
-      // 始终写入所有活跃规则（filter 会移除旧 ⚠ 条目，不会重复）
-      toWrite.push(formatSingleRule(rule));
-      if (!rule.written) { rule.written = true; rulesChanged = true; }
-    }
-
-    if (rulesChanged) { saveRules(); ctx.log?.debug?.("[self-evolve] rules state updated (dismissed/written)"); }
-    if (toWrite.length === 0) {
-      ctx.log?.debug?.("[self-evolve] no new rules to sync to pinned memory");
+    // 从 activeRules 提取所有 agentId（规则 key 格式: {agentId}:{tool}_{pattern}）
+    const agentIds = [...new Set(activeRules.map(r => {
+      const idx = r.pattern.indexOf(':');
+      return idx > 0 ? r.pattern.substring(0, idx) : null;
+    }).filter(Boolean))];
+    if (agentIds.length === 0) {
+      ctx.log?.debug?.("[self-evolve] no agentIds derived from rules, skip pinned sync");
       return;
     }
 
-    ctx.log?.debug?.("[self-evolve] writing " + toWrite.length + " rules to pinned memory");
+    let totalWritten = 0;
+    let totalSkipped = 0;
 
-    // 移除旧 self-evolve 条目，写入新规则
-    const filtered = existingPins.filter(p => {
-      if (typeof p !== "string") return true;
-      if (/^(?:- )?⚠\s+.+\s+→\s+.+/.test(p.trim())) return false;
-      if (p.includes("工具调用经验") || p.includes("工具调用自进化规则")) return false;
-      return true;
-    });
+    for (const agentId of agentIds) {
+      const agentRules = activeRules.filter(r => r.pattern.startsWith(agentId + ':'));
+      if (agentRules.length === 0) continue;
 
-    const putRes = await ctx.network.fetch(`${baseUrl}/api/pinned?agentId=${encodeURIComponent(agentId)}`, {
-      method: "PUT",
-      headers,
-      body: JSON.stringify({ pins: [...filtered, ...toWrite] }),
-    });
+      try {
+        // GET 该 agent 的当前置顶记忆
+        const getRes = await ctx.network.fetch(`${baseUrl}/api/pinned?agentId=${encodeURIComponent(agentId)}`, { headers });
+        let existingPins = [];
+        if (getRes.ok) {
+          const body = await getRes.json();
+          existingPins = Array.isArray(body?.pins) ? body.pins : [];
+        } else if (getRes.status === 404) {
+          ctx.log?.warn?.("[self-evolve] agent not found, skip: " + agentId);
+          totalSkipped += agentRules.length;
+          continue;
+        } else {
+          ctx.log?.warn?.("[self-evolve] GET pinned failed for agent " + agentId + ": " + getRes.status);
+          totalSkipped += agentRules.length;
+          continue;
+        }
 
-    if (putRes.ok) {
-      // 桌面通知（默认关闭）
-      const notifyEnabled = ctx.config?.get?.("enableSyncNotification");
-      if (notifyEnabled && _initialSyncDone) {
-        ctx.bus?.emit?.({
-          type: "notification",
-          title: "Self Evolve",
-          body: `已同步 ${toWrite.length} 条修复规则到置顶记忆`,
-          agentId,
+        // 提取该 agent 置顶记忆中所有规则的模式名（去 agentId 前缀）
+        const pinnedPatterns = new Set();
+        for (const p of existingPins) {
+          const m = p.trim().match(/^⚠\s+(.+?)\s+→\s+/);
+          if (m) pinnedPatterns.add(m[1].replace(/^[^:]+:/, ''));
+        }
+
+        let rulesChanged = false;
+        const toWrite = [];
+
+        for (const rule of agentRules) {
+          const cleanPattern = rule.pattern.replace(/^[^:]+:/, '');
+          const inPinned = pinnedPatterns.has(cleanPattern);
+
+          if (rule.written && !inPinned) {
+            // 曾经写入过但现在不在置顶记忆中 → 用户手动删除了 → 标记驳回
+            rule.dismissed = true;
+            rulesChanged = true;
+            ctx.log?.info?.("[self-evolve] rule dismissed by user: " + rule.pattern);
+            continue;
+          }
+
+          if (inPinned && !rule.written) { rule.written = true; rulesChanged = true; }
+
+          toWrite.push(formatSingleRule(rule));
+          if (!rule.written) { rule.written = true; rulesChanged = true; }
+        }
+
+        if (rulesChanged) { saveRules(); ctx.log?.debug?.("[self-evolve] rules state updated for " + agentId); }
+        if (toWrite.length === 0) {
+          ctx.log?.debug?.("[self-evolve] no new rules for agent " + agentId);
+          continue;
+        }
+
+        // 移除旧 self-evolve 条目，写入新规则
+        const filtered = existingPins.filter(p => {
+          if (typeof p !== "string") return true;
+          if (/^(?:- )?⚠\s+.+\s+→\s+.+/.test(p.trim())) return false;
+          if (p.includes("工具调用经验") || p.includes("工具调用自进化规则")) return false;
+          return true;
         });
+
+        const putRes = await ctx.network.fetch(`${baseUrl}/api/pinned?agentId=${encodeURIComponent(agentId)}`, {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({ pins: [...filtered, ...toWrite] }),
+        });
+
+        if (putRes.ok) {
+          totalWritten += toWrite.length;
+          const notifyEnabled = ctx.config?.get?.("enableSyncNotification");
+          if (notifyEnabled && _initialSyncDone) {
+            ctx.bus?.emit?.({
+              type: "notification",
+              title: "Self Evolve",
+              body: `已同步 ${toWrite.length} 条修复规则到 ${agentId} 的置顶记忆`,
+              agentId,
+            });
+          }
+          ctx.log?.info?.("[self-evolve] pinned synced for " + agentId + ": " + toWrite.length + " rules");
+        } else {
+          ctx.log?.warn?.("[self-evolve] PUT pinned failed for agent " + agentId + ": " + putRes.status);
+          totalSkipped += agentRules.length;
+        }
+      } catch (err) {
+        ctx.log?.warn?.("[self-evolve] sync failed for agent " + agentId + ": " + err.message);
+        totalSkipped += agentRules.length;
       }
-    } else {
-      ctx.log?.warn?.("[self-evolve] pinned PUT failed: " + putRes.status);
     }
 
-    ctx.log?.info?.("[self-evolve] pinned synced: " + toWrite.length + " rules written, " + activeRules.filter(r => r.dismissed).length + " dismissed");
+    if (totalWritten > 0 || totalSkipped > 0) {
+      ctx.log?.info?.("[self-evolve] pinned sync complete: " + totalWritten + " written, " + totalSkipped + " skipped");
+    }
   } catch (err) {
     ctx.log?.warn?.("[self-evolve] pinned sync failed:", err.message);
   }

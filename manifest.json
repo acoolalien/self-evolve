@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "self-evolve",
   "name": "Self Evolve",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "自动捕获 Agent 工具调用失败，同类错误累计指定次数后通过 LLM 分析生成修复规则，写入置顶记忆实现自进化。",
   "minAppVersion": "0.159.0",
   "trust": "full-access",
