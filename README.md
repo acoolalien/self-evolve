@@ -65,6 +65,32 @@
 - **refine**：旧规则措辞还不够强 → 覆盖为更强版本（如「建议用正斜杠」→「必须用正斜杠」）
 - **same**：规则正确但 Agent 忽略了 → 只累加次数，不改规则
 
+### 编码乱码过滤
+
+Windows 终端默认编码为 CP936（GBK），部分工具（如 PowerShell）
+输出中文时若被以 UTF-8 解码，会变成 `?????????????` 或 `�`（U+FFFD）。
+
+`isNoiseError` 在进入分类前从错误文本提取纯文本内容，
+检测非空白字符中 `?` / `�` 占比是否超过 30%。
+超过则直接丢弃，**不计数、不分类、不进分析管道**。
+
+```javascript
+// 提取纯文本（JSON 错误结构 → 实际消息）
+try {
+  const parsed = JSON.parse(text);
+  if (parsed?.content?.[0]?.type === "text")
+    text = parsed.content[0].text;
+} catch {}
+
+// 判断是否乱码
+const nonSpace = text.replace(/\s/g, '');
+const garbage = (nonSpace.match(/[?\uFFFD]/g) || []).length;
+if (garbage / nonSpace.length > 0.3) return true;  // 按噪声丢弃
+```
+
+> 分析 1464 条历史错误，413 条（28.2%）为 bash 工具产生的编码乱码。
+> 应在 OpenHanako 层面修复，此过滤作为过渡期兜底。
+
 ### 用户删除规则的处理
 
 如果用户在设置页的置顶记忆中手动删除了一条 `⚠` 开头的规则：
@@ -73,6 +99,7 @@
 2. 自动标记该规则为 `dismissed: true`
 3. 规则保留在 `fix-rules.json`（数据不丢），但不再写回置顶记忆
 4. 手动删除一次后永久生效
+5. 已驳回的规则再次出现同类错误时，**跳过 LLM 分析**，不再浪费调用
 
 如需彻底清除某条规则，编辑 `fix-rules.json` 删除对应条目并 reload 插件。
 
@@ -106,6 +133,7 @@
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | 触发灵敏度 | enum：灵敏/适中/标准 | 适中 | 同类错误累计多少次后触发 LLM 分析 |
+| 同步通知 | boolean | false | 规则写入置顶记忆后在系统托盘弹出桌面通知 |
 
 ## 结构
 

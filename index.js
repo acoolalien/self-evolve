@@ -17,6 +17,7 @@
 
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join, sep } from "node:path";
+import { homedir } from "node:os";
 
 // ── 常量 ──
 const MAX_RECORDS = 500;
@@ -32,6 +33,7 @@ let _llmUnavailableLogged = false;
 let rulesPath = null;
 let failuresPath = null;
 let lastPinnedSync = 0;
+let _initialSyncDone = false;
 let recordIdSeq = 0;
 
 const failureLog = new Map();          // id → FailureRecord
@@ -183,7 +185,17 @@ function saveRules() {
  */
 function isNoiseError(errorText) {
   if (!errorText || !errorText.trim()) return true;
-  const t = errorText.trim().toLowerCase();
+
+  // 从 JSON 错误结构中提取纯文本内容
+  let text = errorText.trim();
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed?.content?.[0]?.type === "text" && typeof parsed.content[0].text === "string") {
+      text = parsed.content[0].text;
+    }
+  } catch { /* 非 JSON 格式，直接用原文本 */ }
+
+  const t = text.toLowerCase();
   // 纯退出码 + 无输出
   if (/^\(no output\)\s*$/i.test(t)) return true;
   if (/^command exited with code\s+\d+/i.test(t)) return true;
@@ -193,6 +205,12 @@ function isNoiseError(errorText) {
   if (t.includes("lf would be replaced by crlf")) return true;
   // 纯空白或仅特殊字符
   if (/^[\s\-.]*$/.test(t)) return true;
+  // 编码乱码：非空白字符中问号占比 > 50%
+  const nonSpace = t.replace(/\s/g, '');
+  if (nonSpace.length > 0) {
+    const qmarkCount = (nonSpace.match(/[?\uFFFD]/g) || []).length;
+    if (qmarkCount / nonSpace.length > 0.3) return true;
+  }
   return false;
 }
 
@@ -458,10 +476,10 @@ async function syncPinnedMemory(ctx, force = false) {
   if (activeRules.length === 0) return;
 
   try {
-    const homeDir = process.env.USERPROFILE || "C:\\Users\\13952";
+    const homeDir = process.env.USERPROFILE || homedir();
     const siPath = join(homeDir, ".hanako", "server-info.json");
     let token = "";
-    let port = 12222;
+    let port = 0;
     try {
       const si = JSON.parse(readFileSync(siPath, "utf-8"));
       if (si.token) token = si.token;
@@ -469,7 +487,7 @@ async function syncPinnedMemory(ctx, force = false) {
     } catch { /* token-less fallback */ }
 
     const agentId = ctx.sessionPath
-      ? ctx.sessionPath.split(path.sep).slice(-3, -2)[0]
+      ? ctx.sessionPath.split(sep).slice(-3, -2)[0]
       : "hanako";
 
     const baseUrl = `http://127.0.0.1:${port}`;
@@ -529,11 +547,26 @@ async function syncPinnedMemory(ctx, force = false) {
       return true;
     });
 
-    await ctx.network.fetch(`${baseUrl}/api/pinned?agentId=${encodeURIComponent(agentId)}`, {
+    const putRes = await ctx.network.fetch(`${baseUrl}/api/pinned?agentId=${encodeURIComponent(agentId)}`, {
       method: "PUT",
       headers,
       body: JSON.stringify({ pins: [...filtered, ...toWrite] }),
     });
+
+    if (putRes.ok) {
+      // 桌面通知（默认关闭）
+      const notifyEnabled = ctx.config?.get?.("enableSyncNotification");
+      if (notifyEnabled && _initialSyncDone) {
+        ctx.bus?.emit?.({
+          type: "notification",
+          title: "Self Evolve",
+          body: `已同步 ${toWrite.length} 条修复规则到置顶记忆`,
+          agentId,
+        });
+      }
+    } else {
+      ctx.log?.warn?.("[self-evolve] pinned PUT failed: " + putRes.status);
+    }
 
     ctx.log?.info?.("[self-evolve] pinned synced: " + toWrite.length + " rules written, " + activeRules.filter(r => r.dismissed).length + " dismissed");
   } catch (err) {
@@ -613,6 +646,11 @@ async function processFailure(ctx, record) {
   }
 
   if (existingRule) {
+    if (existingRule.dismissed) {
+      ctx.log?.debug?.("[self-evolve] dismissed rule, skip analysis:", signature);
+      return;
+    }
+
     // 第 N 次失败 + 已有规则 → 对比式重分析
     ctx.log?.info?.("[self-evolve] re-analyzing rule: " + signature + " (count=" + count + ")");
     const parsed = await analyzeWhyRuleFailed(ctx, record, existingRule);
@@ -756,7 +794,10 @@ export default class Plugin {
       log.warn?.("[self-evolve] bus.subscribe unavailable, tool errors will not be auto-captured");
     }
 
-    setTimeout(() => syncPinnedMemory(ctx), 5000);
+    setTimeout(async () => {
+      await syncPinnedMemory(ctx);
+      _initialSyncDone = true;
+    }, 5000);
   }
 
   async onunload() {

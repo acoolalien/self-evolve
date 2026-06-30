@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "self-evolve",
   "name": "Self Evolve",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "自动捕获 Agent 工具调用失败，同类错误累计指定次数后通过 LLM 分析生成修复规则，写入置顶记忆实现自进化。",
   "minAppVersion": "0.159.0",
   "trust": "full-access",
@@ -23,6 +23,12 @@
           "default": "适中",
           "enum": ["灵敏", "适中", "标准"],
           "description": "同类错误发生多少次后触发 LLM 分析。灵敏=1次、适中=2次、标准=3次"
+        },
+        "enableSyncNotification": {
+          "title": "同步通知",
+          "type": "boolean",
+          "default": false,
+          "description": "修复规则写入置顶记忆后在系统托盘弹出通知"
         }
       }
     }
