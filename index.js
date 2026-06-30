@@ -100,8 +100,7 @@ const EPHEMERAL_PATTERNS = new Set(
 // ── 延迟分析模式（周期性 LLM 判断，不直接触发）──
 const DEFERRED_PATTERNS = new Set(["file_not_found"]);
 function classifyError(tool, errorMsg) {
-  // 剥离 "Received arguments:" 段——工具校验错误会把完整参数原文附加在错误信息后
-  // 其中可能包含 utf-8、oldText 等源码级 token，污染关键词匹配
+  // 剥离 "Received arguments:" 段
   let clean = (errorMsg || "");
   const argIdx = clean.indexOf("\nReceived arguments:");
   if (argIdx >= 0) clean = clean.substring(0, argIdx);
@@ -109,17 +108,23 @@ function classifyError(tool, errorMsg) {
   const msg = clean.toLowerCase();
   const toolKey = String(tool || "unknown").toLowerCase().replace(/\s+/g, "_");
 
+  // 全量扫描取最长匹配关键词，消除短词截胡长词的排序依赖
+  // 长度相同时数组顺序靠前的优先
+  let bestPattern = null;
+  let bestKwLen = -1;
+
   for (const cls of ERROR_CLASSIFIERS) {
-    if (cls.keywords.length === 0) {
-      return `${toolKey}_${cls.pattern}`; // unclassified 兜底
-    }
+    if (cls.keywords.length === 0) continue; // unclassified 兜底
     for (const kw of cls.keywords) {
-      if (msg.includes(kw)) {
-        return `${toolKey}_${cls.pattern}`;
+      if (msg.includes(kw) && kw.length > bestKwLen) {
+        bestPattern = cls.pattern;
+        bestKwLen = kw.length;
       }
     }
   }
-  return `${toolKey}_unclassified`;
+
+  if (bestPattern === null) return `${toolKey}_unclassified`;
+  return `${toolKey}_${bestPattern}`;
 }
 
 // ── 工具函数 ──

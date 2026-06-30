@@ -1,0 +1,145 @@
+// ── self-evolve 错误工具调用测试数据 ──
+// 格式：JSON Lines (ndjson)，每行是一个 tool_execution_end 事件
+// 直接注入 bus 或通过 processFailure 处理
+// 覆盖：全部 17 个分类器 + 噪声过滤 + 参数剥离 + 边界情况
+
+// =============================================
+// 第1组：可分析模式（触发 LLM 分析）
+// =============================================
+
+// 1a. encoding —— GBK 乱码（常见于 Windows PowerShell 管道）
+{"tool":"bash","args":"type C:\\data\\中文.txt","error":"'gbk' codec can't decode byte 0x80 in position 5: illegal multibyte sequence","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_abc.jsonl","timestamp":1719700000000}
+
+// 1b. encoding —— chcp 切换编码失败
+{"tool":"bash","args":"chcp 65001","error":"chcp : Active code page: 936 — gbk encoding still active after chcp 65001","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_def.jsonl","timestamp":1719700001000}
+
+// 1c. edit_failure —— oldText 不匹配
+{"tool":"edit","args":"{\"path\":\"readme.md\",\"edits\":[{\"oldText\":\"old content\"}]}","error":"Could not find the exact text \"old content\" in readme.md — no match found","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_ghi.jsonl","timestamp":1719700002000}
+
+// 1d. edit_failure —— 老版本 edit 的 old_text 参数名
+{"tool":"edit","args":"{\"path\":\"config.json\",\"oldText\":\"debug: false\"}","error":"The old_text string to replace was not found in the file — could not find the exact text","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_jkl.jsonl","timestamp":1719700003000}
+
+// 1e. validation —— 缺少必填参数
+{"tool":"web_fetch","args":"{\"maxLength\":500}","error":"Validation failed: required parameter 'url' is missing, invalid type for 'url': expected string, received null","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_mno.jsonl","timestamp":1719700004000}
+
+// 1f. validation —— 参数类型错误
+{"tool":"media_generate-image","args":"{\"count\":\"3\"}","error":"Validation: must have integer property 'count' — invalid type","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_pqr.jsonl","timestamp":1719700005000}
+
+// 1g. parse_error —— JSON 解析失败（LLM 输出非标准 JSON）
+{"tool":"workflow","args":"{\"script\":\"export const meta = {}\"}","error":"SyntaxError: Unexpected token 'I', \"I think\"... is not valid JSON","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_stu.jsonl","timestamp":1719700006000}
+
+// 1h. parse_error —— Python 回溯
+{"tool":"bash","args":"python script.py","error":"Traceback (most recent call last):\n  File \"script.py\", line 3, in <module>\n    import nonexistent\nModuleNotFoundError: No module named 'nonexistent'","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_vwx.jsonl","timestamp":1719700007000}
+
+// 1i. ambiguous_match —— edit 多个匹配
+{"tool":"edit","args":"{\"edits\":[{\"oldText\":\"function\"}]}","error":"Found 3 occurrences of 'function' in index.js — ambiguous match, specify unique context","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_yza.jsonl","timestamp":1719700008000}
+
+// =============================================
+// 第2组：不可控/短暂性模式（只计数，不分析）
+// file_not_found 为延迟分析；其余为 ephemeral
+// =============================================
+
+// 2a. file_not_found —— ENOENT（延迟分析模式）
+{"tool":"read","args":"C:\\non_existent\\data.txt","error":"ENOENT: no such file or directory, open 'C:\\non_existent\\data.txt'","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aab.jsonl","timestamp":1719700009000}
+
+// 2b. file_not_found —— 找不到路径
+{"tool":"stat","args":"{\"path\":\"nonexistent.md\"}","error":"ENOENT: stat C:\\Users\\Marvin\\Desktop\\hanako\\nonexistent.md — no such file or directory","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aac.jsonl","timestamp":1719700010000}
+
+// 2c. syntax_error —— PowerShell 语法错误
+{"tool":"bash","args":"if ($a -eq 1) { }","error":"表达式或语句中包含意外的标记","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aad.jsonl","timestamp":1719700011000}
+
+// 2d. syntax_error —— 命令不在 PATH 中（同时可匹配 cmd_not_found，按数组顺序 syntax_error 先命中）
+{"tool":"bash","args":"npm start","error":"'npm' is not recognized as an internal or external command","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aae.jsonl","timestamp":1719700012000}
+
+// 2e. git_conflict —— 推送被拒绝
+{"tool":"bash","args":"git push origin main","error":"! [rejected] main -> main (non-fast-forward)\nfailed to push some refs","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aaf.jsonl","timestamp":1719700013000}
+
+// 2f. git_conflict —— 未暂存修改导致拉取失败
+{"tool":"bash","args":"git pull --rebase","error":"Cannot pull with rebase: You have unstaged changes.","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aag.jsonl","timestamp":1719700014000}
+
+// 2g. timeout —— 工具超时
+{"tool":"web_fetch","args":"https://slow-server.example.com","error":"Timeout: request timed out after 30000ms","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aah.jsonl","timestamp":1719700015000}
+
+// 2h. timeout —— bash 命令超时
+{"tool":"bash","args":"ping -n 100 localhost","error":"Command timed out after 120000 ms — time limit exceeded","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aai.jsonl","timestamp":1719700016000}
+
+// 2i. network_error —— 连接被拒绝
+{"tool":"web_fetch","args":"http://localhost:9999","error":"FetchError: request to http://localhost:9999 failed, reason: connect ECONNREFUSED 127.0.0.1:9999","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aaj.jsonl","timestamp":1719700017000}
+
+// 2j. network_error —— DNS 查找失败
+{"tool":"web_search","args":"query=trending repos","error":"Could not connect to search API — ENOTFOUND api.github.com","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aak.jsonl","timestamp":1719700018000}
+
+// 2k. rate_limit —— 429 Too Many Requests
+{"tool":"web_fetch","args":"https://api.example.com/data","error":"HTTP 429: Too Many Requests — Rate limit exceeded, retry after 30s","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aal.jsonl","timestamp":1719700019000}
+
+// 2l. sandbox_denied —— 权限被拒绝
+{"tool":"bash","args":"C:\\Windows\\System32\\regedit.exe","error":"Sandbox blocked by security policy: operation not permitted to modify registry","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aam.jsonl","timestamp":1719700020000}
+
+// 2m. sandbox_denied —— 访问 Windows 服务被拒
+{"tool":"bash","args":"sc stop wuauserv","error":"OpenService 失败 5: 拒绝访问。 — Access is denied.","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aan.jsonl","timestamp":1719700021000}
+
+// 2n. auth —— 401 未授权
+{"tool":"web_fetch","args":"https://api.github.com/user","error":"HTTP 401: Unauthorized — Bad credentials","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aao.jsonl","timestamp":1719700022000}
+
+// 2o. context_overflow —— Token 超限
+// ⚠ 注意：需避免触发 rate_limit 的关键词 "exceeded"（索引 10 优先于 context_overflow 的索引 14）
+{"tool":"read","args":"C:\\very_large_file.txt","error":"The prompt is too long — this topic has been truncated to keep within context length","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aap.jsonl","timestamp":1719700023000}
+
+// 2p. empty_result —— 无输出
+{"tool":"bash","args":"where nonexistent.exe","error":"INFO: Could not find files for the given pattern(s). No output — returned nothing","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aaq.jsonl","timestamp":1719700024000}
+
+// 2q. cmd_not_found —— 模块未找到
+// 🔴 已知问题：cmd_not_found 的所有关键词都被 file_not_found（索引 5）的关键词
+//    "not found" 覆盖——"command not found"/"module not found"/"cannot find module"
+//    均含 "not found"。cmd_not_found 的关键词 "is not recognized as an internal"
+//    又被 syntax_error（索引 6）的 "is not recognized" 截胡。
+//    当前分类器顺序下 cmd_not_found 永不可达，此为排序缺陷。
+//    此测试行仅用于记录该行为（实际被分类为 bash_file_not_found）
+{"tool":"bash","args":"npx package-name","error":"internal/modules/cjs/loader.js:960 — Module not found: 'package-name'","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aar.jsonl","timestamp":1719700025000}
+
+// =============================================
+// 第3组：噪声过滤（被 isNoiseError 丢弃）
+// =============================================
+
+// 3a. 纯退出码 + 无输出
+{"tool":"bash","args":"exit 1","error":"(No output)\nCommand exited with code 1","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aas.jsonl","timestamp":1719700026000}
+
+// 3b. Git 警告（非错误）
+{"tool":"bash","args":"git add .","error":"warning: LF will be replaced by CRLF in package.json.","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aat.jsonl","timestamp":1719700027000}
+
+// 3c. 空文本
+{"tool":"read","args":"/dev/null","error":"","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aau.jsonl","timestamp":1719700028000}
+
+// 3d. 编码乱码（问号占比 > 30%）
+{"tool":"bash","args":"type corrupted.txt","error":"????? ???¥§?¶ ?? ????????","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aav.jsonl","timestamp":1719700029000}
+
+// 3e. 纯空白和分隔符
+{"tool":"bash","args":"echo test","error":"---","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aaw.jsonl","timestamp":1719700030000}
+
+// =============================================
+// 第4组：边界情况与特殊流程
+// =============================================
+
+// 4a. Received arguments: 剥离 —— 工具校验错误后附带完整参数原文
+//     错误正文为 "Could not find the exact text"，后面附加了含 utf-8 和 oldText 的参数
+//     剥离后应匹配 edit_failure，而非被 encoding/validation 污染
+{"tool":"edit","args":"{\"edits\":[{\"oldText\":\"你好\"}]}","error":"Could not find the exact text '你好' in index.js\nReceived arguments: {\"path\":\"C:/test/index.js\",\"edits\":[{\"oldText\":\"你好\",\"newText\":\"再见\"}],\"encoding\":\"utf-8\"}","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aax.jsonl","timestamp":1719700031000}
+
+// 4b. JSON 格式错误文本——isNoiseError 从 JSON 解包后判断 "ENOENT: no such file"
+//     解包后为真实错误，不被噪声过滤
+{"tool":"read","args":"/tmp/test","error":"{\"content\":[{\"type\":\"text\",\"text\":\"ENOENT: no such file or directory\"}]}","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aay.jsonl","timestamp":1719700032000}
+
+// 4c. 工具名带空格 —— classifyError 中 tool 被 normalize（media generate image → media_generate_image）
+{"tool":"media generate image","args":"prompt=fantasy landscape","error":"Validation failed: required parameter 'prompt' must have string value","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aaz.jsonl","timestamp":1719700033000}
+
+// 4d. ECONNRESET —— 网络断开（匹配 network_error 的关键词 econnreset）
+{"tool":"web_fetch","args":"https://broken.example.com","error":"FetchError: request to https://broken.example.com failed, reason: socket hang up — ECONNRESET","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_aba.jsonl","timestamp":1719700034000}
+
+// 4e. unclassified 兜底 —— 不匹配任何已知关键词
+{"tool":"custom_tool","args":"--flag value","error":"An obscure internal error occurred: widget buffer overflow on channel 7","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_abb.jsonl","timestamp":1719700035000}
+
+// 4f. 极长错误信息 —— 验证分类器在大文本下不会炸，仍正确命中 sandwich 关键词
+{"tool":"bash","args":"some_long_command","error":"Error: This is a very long error message that exceeds typical length limits and is generated by a complex pipeline failure that involves multiple subprocesses all failing at once, producing a cascading chain of errors that are concatenated together into one massive error text. This should still be classified correctly and should not cause any buffer overflow or crash in the classification logic. The keywords we care about are in this text: permission denied to access the resource, so this should match sandbox_denied ephemeral pattern.","sessionPath":"C:\\Users\\Marvin\\.hanako\\agents\\hanako\\sessions\\ses_abc.jsonl","timestamp":1719700036000}
+
+// 4g. 无 sessionPath —— processFailure 用 "unknown" 作为 agentId
+{"tool":"web_search","args":"query=weather","error":"FetchError: request failed, reason: getaddrinfo ENOTFOUND api.weather.com","sessionPath":"","timestamp":1719700037000}
